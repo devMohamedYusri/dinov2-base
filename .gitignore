@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Environment variables
+.env
+.env.local
+
+# Google Colab Notebook & local scratch
+ingest_colab.ipynb
+*.ipynb
+scratch/
+*.log
+local_cache/
+
+# Offline development & conversion scripts (not needed for deployment)
+convert_to_onnx.py
+ingest_qdrant.py
+requirements-dev.txt
+dinov2_base_raw.onnx
+dinov2_base_raw.onnx.data
+dinov2_base_raw-inferred.onnx
+
+# OS files
+.DS_Store
+Thumbs.db
