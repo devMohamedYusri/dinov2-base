@@ -12,3 +12,5 @@ services:
         sync: false
       - key: COLLECTION_NAME
         value: furniture_catalog
+      - key: PYTHON_VERSION
+        value: 3.11.9
