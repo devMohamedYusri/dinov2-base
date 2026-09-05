@@ -105,12 +105,14 @@ def preprocess_image(img: Image.Image) -> np.ndarray:
 
 
 def generate_embedding(session: ort.InferenceSession, img: Image.Image) -> List[float]:
-    """Run single image inference and return L2-normalized 768-dim vector."""
+    """Run single image inference and return L2-normalized vector."""
     input_tensor = preprocess_image(img)
-    outputs = session.run(None, {"pixel_values": input_tensor})
+    # Dynamically detect input tensor name (e.g. 'pixel_values', 'x', 'arg0')
+    input_name = session.get_inputs()[0].name
+    outputs = session.run(None, {input_name: input_tensor})
     raw_vec = outputs[0]
 
-    # Handle both wrapped 2D output (1, 768) and raw 3D output (1, seq_len, 768)
+    # Handle both wrapped 2D output (1, dim) and raw 3D output (1, seq_len, dim)
     if raw_vec.ndim == 3:
         cls_token = raw_vec[:, 0, :]
         norm = np.linalg.norm(cls_token, axis=1, keepdims=True)
@@ -130,19 +132,18 @@ async def load_image_from_bytes_or_url(
     file: Optional[UploadFile] = None, image_url: Optional[str] = None
 ) -> Image.Image:
     """Load and validate an image from either a file upload or an image URL."""
-    if file and file.filename:
+    if file and hasattr(file, "filename") and file.filename:
         content = await file.read()
-        if not content:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-        try:
-            return Image.open(io.BytesIO(content))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
+        if content:
+            try:
+                return Image.open(io.BytesIO(content))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
-    if image_url:
+    if image_url and image_url.strip():
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(image_url)
+                resp = await client.get(image_url.strip())
                 if resp.status_code != 200:
                     raise HTTPException(
                         status_code=400,
@@ -202,7 +203,7 @@ def root():
         "endpoints": {
             "search_multipart": "POST /search (file upload or image_url form field)",
             "search_json": "POST /search-json (JSON body: {image_url, limit, category, store_name})",
-            "embed": "POST /embed (generates 768-dim normalized embedding)",
+            "embed": "POST /embed (generates 384-dim normalized embedding)",
             "health": "GET /health (service uptime check)",
         },
     }
@@ -227,17 +228,22 @@ async def embed(
     image_url: Optional[str] = Form(None),
 ):
     """
-    Generate and return the 768-dim normalized embedding for an image.
+    Generate and return the 384-dim normalized embedding for an image.
     Accepts either multipart file upload or 'image_url' form field.
     """
-    session = get_onnx_session()
-    img = await load_image_from_bytes_or_url(file, image_url)
     try:
-        embedding = generate_embedding(session, img)
-    finally:
-        img.close()
-
-    return {"dim": len(embedding), "embedding": embedding}
+        session = get_onnx_session()
+        img = await load_image_from_bytes_or_url(file, image_url)
+        try:
+            embedding = generate_embedding(session, img)
+        finally:
+            img.close()
+        return {"dim": len(embedding), "embedding": embedding}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error in /embed")
+        raise HTTPException(status_code=500, detail=f"Embed error: {str(e)}")
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -260,69 +266,81 @@ async def search_by_image(
     - store_name: Filter by store ('Chic Homz', 'Hub Furniture', 'Homzmart')
     - min_price / max_price: Price range in EGP
     """
-    session = get_onnx_session()
-    qdrant = get_qdrant()
-
-    img = await load_image_from_bytes_or_url(file, image_url)
     try:
-        query_vector = generate_embedding(session, img)
-    finally:
-        img.close()
+        session = get_onnx_session()
+        qdrant = get_qdrant()
 
-    # Build Qdrant filters if requested
-    must_conditions = []
-    if category:
-        must_conditions.append(
-            models.FieldCondition(key="category", match=models.MatchValue(value=category.lower()))
-        )
-    if store_name:
-        must_conditions.append(
-            models.FieldCondition(key="store_name", match=models.MatchValue(value=store_name))
-        )
-    if min_price is not None or max_price is not None:
-        must_conditions.append(
-            models.FieldCondition(
-                key="price_egp",
-                range=models.Range(
-                    gte=min_price if min_price is not None else 0.0,
-                    lte=max_price if max_price is not None else float("inf"),
-                ),
+        img = await load_image_from_bytes_or_url(file, image_url)
+        try:
+            query_vector = generate_embedding(session, img)
+        finally:
+            img.close()
+
+        # Build Qdrant filters if requested
+        must_conditions = []
+        if category:
+            must_conditions.append(
+                models.FieldCondition(key="category", match=models.MatchValue(value=category.lower()))
             )
-        )
+        if store_name:
+            must_conditions.append(
+                models.FieldCondition(key="store_name", match=models.MatchValue(value=store_name))
+            )
+        if min_price is not None or max_price is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="price_egp",
+                    range=models.Range(
+                        gte=min_price if min_price is not None else 0.0,
+                        lte=max_price if max_price is not None else float("inf"),
+                    ),
+                )
+            )
 
-    query_filter = models.Filter(must=must_conditions) if must_conditions else None
+        query_filter = models.Filter(must=must_conditions) if must_conditions else None
 
-    try:
-        search_results = qdrant.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_vector,
-            query_filter=query_filter,
-            limit=limit,
-            with_payload=True,
-        )
+        try:
+            search_results = qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+            )
+        except Exception as e:
+            logger.error(f"Qdrant query failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Qdrant search error: {str(e)}")
+
+        formatted_results = []
+        for p in search_results.points:
+            payload = p.payload or {}
+            raw_price = payload.get("price_egp")
+            try:
+                price_val = float(raw_price) if raw_price is not None else 0.0
+            except (ValueError, TypeError):
+                price_val = 0.0
+
+            formatted_results.append(
+                SearchResultItem(
+                    id=str(p.id),
+                    score=float(p.score),
+                    title=str(payload.get("title", "Unknown")),
+                    price_egp=price_val,
+                    category=payload.get("category"),
+                    store_name=payload.get("store_name"),
+                    product_url=str(payload.get("product_url", "")),
+                    image_url=str(payload.get("image_url", "")),
+                    in_stock=bool(payload.get("in_stock", True)),
+                    payload=payload,
+                )
+            )
+
+        return SearchResponse(total_results=len(formatted_results), results=formatted_results)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Qdrant query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Qdrant search error: {str(e)}")
-
-    formatted_results = []
-    for p in search_results.points:
-        payload = p.payload or {}
-        formatted_results.append(
-            SearchResultItem(
-                id=str(p.id),
-                score=float(p.score),
-                title=payload.get("title", "Unknown"),
-                price_egp=float(payload.get("price_egp", 0.0)),
-                category=payload.get("category"),
-                store_name=payload.get("store_name"),
-                product_url=payload.get("product_url", ""),
-                image_url=payload.get("image_url", ""),
-                in_stock=payload.get("in_stock", True),
-                payload=payload,
-            )
-        )
-
-    return SearchResponse(total_results=len(formatted_results), results=formatted_results)
+        logger.exception("Error in /search")
+        raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
 
 
 @app.post("/search-json", response_model=SearchResponse)
