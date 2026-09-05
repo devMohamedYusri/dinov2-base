@@ -30,15 +30,15 @@ logger = logging.getLogger("search-api")
 # ---------------------------------------------------------------------------
 QDRANT_URL = os.getenv("QDRANT_URL", "")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "furniture_catalog")
-ONNX_MODEL_PATH = os.getenv("ONNX_MODEL_PATH", "dinov2_base_quant.onnx")
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "furniture_catalog_small")
+ONNX_MODEL_PATH = os.getenv("ONNX_MODEL_PATH", "dinov2_small_quant.onnx")
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 app = FastAPI(
     title="Furniture Visual Search API",
-    description="Search 50,000+ Egyptian furniture catalog items by image similarity using DINOv2-base",
+    description="Search 46,900+ Egyptian furniture catalog items by image similarity using DINOv2-small",
     version="1.0.0",
 )
 
@@ -64,7 +64,7 @@ def get_onnx_session() -> ort.InferenceSession:
         if not os.path.exists(ONNX_MODEL_PATH):
             raise RuntimeError(
                 f"Model file '{ONNX_MODEL_PATH}' not found. "
-                "Run convert_to_onnx.py first and ensure dinov2_base_quant.onnx is present."
+                "Ensure dinov2_small_quant.onnx is present in the project directory."
             )
         logger.info("Loading ONNX model into memory (arena disabled for 512MB RAM)...")
         opts = ort.SessionOptions()
@@ -196,7 +196,7 @@ def root():
     return {
         "service": "Egyptian Furniture Visual Search API",
         "status": "online",
-        "model": "DINOv2-base (INT8 quantized ONNX, 768-dim)",
+        "model": "DINOv2-small (INT8 quantized ONNX, 384-dim)",
         "catalog": f"Collection '{COLLECTION_NAME}' (46,900+ Egyptian furniture products)",
         "documentation": "/docs",
         "endpoints": {

@@ -11,6 +11,8 @@ services:
       - key: QDRANT_API_KEY
         sync: false
       - key: COLLECTION_NAME
-        value: furniture_catalog
+        value: furniture_catalog_small
+      - key: ONNX_MODEL_PATH
+        value: dinov2_small_quant.onnx
       - key: PYTHON_VERSION
         value: 3.11.9

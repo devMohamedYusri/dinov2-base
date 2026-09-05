@@ -23,10 +23,12 @@ local_cache/
 # Offline development & conversion scripts (not needed for deployment)
 convert_to_onnx.py
 ingest_qdrant.py
-requirements-dev.txt
 dinov2_base_raw.onnx
 dinov2_base_raw.onnx.data
 dinov2_base_raw-inferred.onnx
+dinov2_base_quant.onnx
+dinov2_small_raw.onnx
+dinov2_small_raw.onnx.data
 
 # OS files
 .DS_Store
